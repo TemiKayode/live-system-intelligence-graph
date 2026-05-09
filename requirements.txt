@@ -12,32 +12,34 @@ tree-sitter-go>=0.21.0
 tree-sitter-java>=0.21.0
 tree-sitter-ruby>=0.21.0
 
-# Layer 4 — Ownership and Data Flow Engine
-presidio-analyzer>=2.2.354    # PII NLP detection
-presidio-anonymizer>=2.2.354  # (optional, for anonymisation workflows)
-spacy>=3.7.0                  # Presidio NLP backend
-# python -m spacy download en_core_web_lg  (run post-install)
-
-# Layer 3 — Security Posture Engine
-minio>=7.2.0                  # SBOM archival
-# syft and nuclei are external binaries (not pip packages); install via their own installers
-
 # Layer 2 — Runtime Call Graph Engine
 kafka-python>=2.0.2           # standalone consumer
 pydantic>=2.7.0               # event schema validation
-apache-flink>=1.18.0; sys_platform != "win32"  # Flink only on Linux/Mac
+# apache-flink: install separately via pip install apache-flink>=1.18.0
+# Not in requirements.txt — it pulls in a JVM and conflicts with CI pip resolver
 
-# Testing
-pytest>=8.0.0
-pytest-asyncio>=0.23.0
-httpx>=0.27.0          # for FastAPI TestClient
+# Layer 3 — Security Posture Engine
+minio>=7.2.0                  # SBOM archival
+# syft and nuclei are external binaries; install via their own installers
+
+# Layer 4 — Ownership and Data Flow Engine
+presidio-analyzer>=2.2.354    # PII NLP detection
+presidio-anonymizer>=2.2.354
+spacy>=3.7.0                  # Presidio NLP backend
+# After install: python -m spacy download en_core_web_lg
 
 # Layer 5 — Graph Store and Query Layer
 anthropic>=0.30.0             # Claude API for NL→Cypher + narrative generation
 weaviate-client>=4.0.0        # Weaviate vector index for semantic search
 
 # Layer 6 — Change Impact Certificate Engine
-temporalio>=1.3.0             # Temporal workflow orchestration (optional; falls back gracefully)
+# temporalio: optional — install separately: pip install temporalio>=1.3.0
+# Falls back to stub mode if not installed (see layer6/workflows/change_impact_workflow.py)
+
+# Testing
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+httpx>=0.27.0                 # FastAPI TestClient
 
 # Utilities
 python-dotenv>=1.0.0
