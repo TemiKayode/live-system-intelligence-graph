@@ -1,0 +1,43 @@
+# Layer 1 — Code Intelligence Engine
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+neo4j>=5.19.0
+
+# Tree-sitter (optional — regex fallback used when grammars absent)
+tree-sitter>=0.22.0
+tree-sitter-python>=0.21.0
+tree-sitter-javascript>=0.21.0
+tree-sitter-typescript>=0.21.0
+tree-sitter-go>=0.21.0
+tree-sitter-java>=0.21.0
+tree-sitter-ruby>=0.21.0
+
+# Layer 4 — Ownership and Data Flow Engine
+presidio-analyzer>=2.2.354    # PII NLP detection
+presidio-anonymizer>=2.2.354  # (optional, for anonymisation workflows)
+spacy>=3.7.0                  # Presidio NLP backend
+# python -m spacy download en_core_web_lg  (run post-install)
+
+# Layer 3 — Security Posture Engine
+minio>=7.2.0                  # SBOM archival
+# syft and nuclei are external binaries (not pip packages); install via their own installers
+
+# Layer 2 — Runtime Call Graph Engine
+kafka-python>=2.0.2           # standalone consumer
+pydantic>=2.7.0               # event schema validation
+apache-flink>=1.18.0; sys_platform != "win32"  # Flink only on Linux/Mac
+
+# Testing
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+httpx>=0.27.0          # for FastAPI TestClient
+
+# Layer 5 — Graph Store and Query Layer
+anthropic>=0.30.0             # Claude API for NL→Cypher + narrative generation
+weaviate-client>=4.0.0        # Weaviate vector index for semantic search
+
+# Layer 6 — Change Impact Certificate Engine
+temporalio>=1.3.0             # Temporal workflow orchestration (optional; falls back gracefully)
+
+# Utilities
+python-dotenv>=1.0.0

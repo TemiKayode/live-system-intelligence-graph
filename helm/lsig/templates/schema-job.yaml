@@ -1,0 +1,55 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "lsig.fullname" . }}-schema-init
+  labels:
+    {{- include "lsig.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: schema-init
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          command:
+            - python
+            - -c
+            - |
+              import time, sys
+              from layer1.neo4j_client import get_driver, run_query
+              # Wait for Neo4j
+              for i in range(30):
+                  try:
+                      run_query("RETURN 1 AS ok")
+                      break
+                  except Exception as e:
+                      if i == 29:
+                          print(f"Neo4j not ready: {e}", file=sys.stderr)
+                          sys.exit(1)
+                      time.sleep(5)
+              # Apply schema
+              with open("/app/schema/v1_init.cypher") as f:
+                  cypher = f.read()
+              for stmt in cypher.split(";"):
+                  stmt = stmt.strip()
+                  if stmt and not stmt.startswith("//"):
+                      try:
+                          run_query(stmt)
+                      except Exception as e:
+                          print(f"Schema stmt failed (may already exist): {e}")
+              print("Schema initialised.")
+          env:
+            - name: NEO4J_URI
+              value: {{ .Values.env.NEO4J_URI | quote }}
+            - name: NEO4J_USER
+              value: {{ .Values.env.NEO4J_USER | quote }}
+            - name: NEO4J_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.secretName }}
+                  key: neo4j-password

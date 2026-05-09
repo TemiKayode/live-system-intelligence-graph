@@ -1,0 +1,76 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: lsig-graph-api
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames:
+      - lsig
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lsig
+      app.kubernetes.io/component: graph-api
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: lsig-cert-api
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames:
+      - lsig
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lsig
+      app.kubernetes.io/component: cert-api
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: lsig-alerts
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: lsig.certificates
+      rules:
+        - alert: LsigCertificateGenerationSlow
+          expr: histogram_quantile(0.95, sum(rate(lsig_certificate_generation_duration_seconds_bucket[5m])) by (le)) > 60
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "LSIG certificate p95 latency > 60s"
+            description: "Certificate generation is taking longer than the 60s SLA."
+
+        - alert: LsigHighCriticalCVECount
+          expr: sum(lsig_cve_reachability_reductions_total) == 0
+          for: 24h
+          labels:
+            severity: info
+          annotations:
+            summary: "No CVE reachability reductions recorded in 24h"
+            description: "The reachability engine may not be running."
+
+        - alert: LsigRuntimeAgentDown
+          expr: absent(lsig_runtime_events_received_total)
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "LSIG runtime agent not emitting events"

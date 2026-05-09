@@ -1,0 +1,134 @@
+# LSIG Helm chart values — override per environment in values-prod.yaml
+
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+
+# ─── Image ────────────────────────────────────────────────────────────────────
+image:
+  repository: ghcr.io/myorg/lsig
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+# ─── Replicas ─────────────────────────────────────────────────────────────────
+replicaCount:
+  graphApi: 2
+  certApi: 2
+  webhook: 1
+
+# ─── Services ─────────────────────────────────────────────────────────────────
+service:
+  type: ClusterIP
+  graphApiPort: 8005
+  certApiPort: 8006
+  webhookPort: 8006
+
+# ─── Ingress ──────────────────────────────────────────────────────────────────
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+  hosts:
+    - host: lsig.example.com
+      paths:
+        - path: /api/graph
+          pathType: Prefix
+          backend: graphApi
+        - path: /api/cert
+          pathType: Prefix
+          backend: certApi
+        - path: /webhook
+          pathType: Prefix
+          backend: webhook
+        - path: /
+          pathType: Prefix
+          backend: dashboard
+  tls:
+    - secretName: lsig-tls
+      hosts:
+        - lsig.example.com
+
+# ─── Resource limits ──────────────────────────────────────────────────────────
+resources:
+  graphApi:
+    requests: { cpu: "250m", memory: "256Mi" }
+    limits:   { cpu: "1",    memory: "512Mi" }
+  certApi:
+    requests: { cpu: "500m", memory: "512Mi" }
+    limits:   { cpu: "2",    memory: "1Gi" }
+  runtimeAgent:
+    requests: { cpu: "100m", memory: "128Mi" }
+    limits:   { cpu: "500m", memory: "256Mi" }
+
+# ─── Environment ──────────────────────────────────────────────────────────────
+env:
+  NEO4J_URI: "bolt://neo4j:7687"
+  NEO4J_USER: "neo4j"
+  KAFKA_BROKERS: "kafka:9092"
+  VICTORIAMETRICS_URL: "http://victoriametrics:8428"
+  WEAVIATE_URL: "http://weaviate:8080"
+  LSIG_AUTH_DISABLED: "false"
+
+# ─── Secrets (reference existing k8s secrets) ────────────────────────────────
+secrets:
+  # Create these secrets before deploying:
+  # kubectl create secret generic lsig-secrets \
+  #   --from-literal=neo4j-password=... \
+  #   --from-literal=anthropic-api-key=... \
+  #   --from-literal=github-token=... \
+  #   --from-literal=github-webhook-secret=... \
+  #   --from-literal=cert-secret=...
+  secretName: lsig-secrets
+
+# ─── Persistence ──────────────────────────────────────────────────────────────
+persistence:
+  sbomStorage:
+    enabled: true
+    size: 10Gi
+    storageClass: ""
+
+# ─── eBPF Runtime Agent ───────────────────────────────────────────────────────
+runtimeAgent:
+  enabled: true
+  # DaemonSet — deployed via k8s/runtime-agent-daemonset.yaml
+  # This value controls whether the agent DaemonSet is included in the Helm release
+  image:
+    repository: ghcr.io/myorg/lsig-runtime-agent
+    tag: "latest"
+
+# ─── Bundled dependencies (disable if using external) ─────────────────────────
+neo4j:
+  enabled: true
+  neo4j:
+    password: "changeme"
+    edition: community
+  volumes:
+    data:
+      mode: defaultStorageClass
+      defaultStorageClass:
+        requests:
+          storage: 20Gi
+
+kafka:
+  enabled: true
+  replicaCount: 3
+  persistence:
+    size: 20Gi
+
+victoriametrics:
+  enabled: true
+
+weaviate:
+  enabled: true
+
+# ─── Monitoring ───────────────────────────────────────────────────────────────
+serviceMonitor:
+  enabled: true
+  namespace: monitoring
+  interval: 30s
+
+# ─── Dashboard ────────────────────────────────────────────────────────────────
+dashboard:
+  enabled: true
+  replicaCount: 1

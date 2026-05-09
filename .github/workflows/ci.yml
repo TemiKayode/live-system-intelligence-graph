@@ -1,0 +1,171 @@
+name: LSIG CI
+
+on:
+  push:
+    branches: [main, "feat/*", "fix/*"]
+  pull_request:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  NEO4J_URI: bolt://localhost:7687
+  NEO4J_USER: neo4j
+  NEO4J_PASSWORD: lsig_dev
+  LSIG_STATE_DIR: /tmp/lsig_state
+
+jobs:
+  # ─── Python Layer 1 ─────────────────────────────────────────────────────────
+  python-layer1:
+    name: Layer 1 — Python type check + unit tests
+    runs-on: ubuntu-latest
+
+    services:
+      neo4j:
+        image: neo4j:5
+        env:
+          NEO4J_AUTH: neo4j/lsig_dev
+          NEO4JLABS_PLUGINS: '["apoc"]'
+        ports:
+          - 7687:7687
+          - 7474:7474
+        options: >-
+          --health-cmd "cypher-shell -u neo4j -p lsig_dev 'RETURN 1'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt mypy ruff pytest
+
+      - name: Apply Neo4j schema
+        run: |
+          pip install neo4j
+          python - <<'EOF'
+          from neo4j import GraphDatabase
+          import time, sys
+          for _ in range(20):
+              try:
+                  d = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j","lsig_dev"))
+                  d.verify_connectivity()
+                  break
+              except Exception:
+                  time.sleep(3)
+          else:
+              sys.exit("Neo4j did not become ready")
+          schema = open("schema/v1_init.cypher").read()
+          with d.session() as s:
+              for stmt in schema.split(";"):
+                  stmt = stmt.strip()
+                  if stmt and not stmt.startswith("//"):
+                      try:
+                          s.run(stmt)
+                      except Exception as e:
+                          print(f"WARN: {e}")
+          print("Schema applied")
+          EOF
+
+      - name: mypy type check
+        run: mypy layer1/ layer2/ layer3/ layer4/ --ignore-missing-imports
+
+      - name: ruff lint
+        run: ruff check layer1/ layer2/ layer3/ layer4/ tests/
+
+      - name: Unit + integration tests (no slow, no neo4j-dependent)
+        run: pytest tests/ -v --tb=short -m "not slow and not neo4j"
+
+      - name: Neo4j integration tests (Layer 1 + 2)
+        run: pytest tests/ -v --tb=short -m "neo4j and not slow"
+
+  # ─── Go eBPF agent ───────────────────────────────────────────────────────────
+  go-runtime-agent:
+    name: Layer 2 — Go runtime agent vet + staticcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: runtime_agent/go.mod
+      - name: go vet
+        working-directory: runtime_agent
+        run: go vet ./...
+      - name: staticcheck
+        uses: dominikh/staticcheck-action@v1
+        with:
+          version: "2024.1.1"
+          working-directory: runtime_agent
+
+  # ─── Helm chart validation ───────────────────────────────────────────────────
+  helm-lint:
+    name: Helm chart lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.14.0
+      - name: Helm lint
+        run: helm lint helm/lsig/ --set secrets.secretName=test
+
+      - name: Helm template
+        run: |
+          helm template lsig helm/lsig/ \
+            --set secrets.secretName=test \
+            --set neo4j.enabled=false \
+            --set kafka.enabled=false \
+            > /dev/null
+
+  # ─── Dashboard TypeScript build ──────────────────────────────────────────────
+  dashboard-build:
+    name: Dashboard TypeScript Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: dashboard/package.json
+      - run: npm install
+      - run: npx tsc --noEmit
+      - run: npm run build
+
+  # ─── Layer 5 + 6 tests ───────────────────────────────────────────────────────
+  python-layer56:
+    name: Layers 5–6 — Graph Query + Certificate Engine
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest pytest-cov
+      - name: Run Layer 5+6 tests
+        env:
+          ANTHROPIC_API_KEY: test-key-not-real
+          LSIG_CERT_SECRET: test-cert-secret
+          LSIG_AUTH_DISABLED: "true"
+          NEO4J_URI: bolt://localhost:7687
+          NEO4J_USER: neo4j
+          NEO4J_PASSWORD: testpassword
+        run: |
+          pytest tests/test_graph_query.py tests/test_certificate_engine.py \
+            -v --tb=short --cov=layer5 --cov=layer6 --cov-report=xml
+      - uses: codecov/codecov-action@v4
+        with:
+          file: coverage.xml

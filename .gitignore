@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+*.cover
+
+# Go
+runtime_agent/lsig-runtime-agent
+runtime_agent/*.o
+runtime_agent/ebpf/*.o
+
+# Node / Dashboard
+dashboard/node_modules/
+dashboard/dist/
+dashboard/.vite/
+
+# Secrets & local config
+.env
+.env.local
+*.env
+secrets/
+*.pem
+*.key
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# LSIG runtime state
+/tmp/lsig_state/
+
+# Helm dependencies (fetched at deploy time)
+helm/lsig/charts/
+
+# Test artefacts
+*.xml
+*.log

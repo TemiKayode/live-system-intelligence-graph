@@ -1,0 +1,225 @@
+---
+# LSIG Runtime Agent — Kubernetes DaemonSet
+# Runs one agent pod per node with the privileges required to attach eBPF uprobes.
+#
+# Security notes:
+#   - hostPID: true   → needed to trace processes in other namespaces
+#   - CAP_SYS_PTRACE  → needed by llvm-symbolizer / addr2line to read /proc/<pid>/mem
+#   - CAP_BPF         → needed to load BPF programs (Linux 5.8+)
+#   - CAP_PERFMON     → needed to open perf ring buffers
+#   - Read-only root filesystem, no NET_ADMIN, no privilege escalation
+#
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: lsig-runtime-agent
+  namespace: lsig
+  labels:
+    app.kubernetes.io/name: lsig-runtime-agent
+    app.kubernetes.io/part-of: lsig
+    app.kubernetes.io/component: layer2
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lsig-runtime-agent
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: lsig-runtime-agent
+        app.kubernetes.io/part-of: lsig
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "9091"
+        prometheus.io/path:   "/metrics"
+    spec:
+      serviceAccountName: lsig-runtime-agent
+      hostPID: true          # required: trace processes across all namespaces
+      hostNetwork: false
+      dnsPolicy: ClusterFirst
+      priorityClassName: system-node-critical
+
+      tolerations:
+        - operator: Exists    # schedule on all nodes including masters
+
+      initContainers:
+        # Wait for Kafka to be reachable before starting the agent
+        - name: wait-kafka
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z ${KAFKA_HOST} ${KAFKA_PORT}; do
+                echo "Waiting for Kafka..."; sleep 3;
+              done
+          env:
+            - name: KAFKA_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: lsig-config
+                  key: kafka.host
+            - name: KAFKA_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: lsig-config
+                  key: kafka.port
+
+      containers:
+        - name: runtime-agent
+          image: ghcr.io/lsig/runtime-agent:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - --bpf-object=/opt/lsig/uprobe.bpf.o
+            - --metrics-addr=:9091
+            - --perf-pages=128
+
+          env:
+            - name: KAFKA_BROKERS
+              valueFrom:
+                configMapKeyRef:
+                  name: lsig-config
+                  key: kafka.brokers
+            - name: KAFKA_TOPIC
+              value: runtime_calls
+            - name: LSIG_SERVICE_MAP
+              valueFrom:
+                configMapKeyRef:
+                  name: lsig-service-map
+                  key: mapping
+                  optional: true
+            # Repo root for stripping absolute paths — set per-service or leave empty
+            - name: LSIG_REPO_ROOT
+              value: ""
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+
+          ports:
+            - name: metrics
+              containerPort: 9091
+              protocol: TCP
+
+          securityContext:
+            privileged: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+              add:
+                - SYS_PTRACE   # symbol resolution via /proc/<pid>/mem
+                - BPF           # load eBPF programs (Linux 5.8+)
+                - PERFMON       # open perf event ring buffers
+
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+
+          volumeMounts:
+            - name: sys
+              mountPath: /sys
+              readOnly: true
+            - name: proc
+              mountPath: /proc-host
+              readOnly: true
+            - name: debugfs
+              mountPath: /sys/kernel/debug
+              readOnly: false   # debugfs needed by some eBPF helpers
+            - name: tmp
+              mountPath: /tmp
+
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: 9091
+            initialDelaySeconds: 15
+            periodSeconds: 30
+
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: 9091
+            initialDelaySeconds: 10
+            periodSeconds: 10
+
+      volumes:
+        - name: sys
+          hostPath:
+            path: /sys
+        - name: proc
+          hostPath:
+            path: /proc
+        - name: debugfs
+          hostPath:
+            path: /sys/kernel/debug
+        - name: tmp
+          emptyDir: {}
+
+      terminationGracePeriodSeconds: 30
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: lsig-runtime-agent
+  namespace: lsig
+  labels:
+    app.kubernetes.io/name: lsig-runtime-agent
+
+---
+# ClusterRole: read pods (for service name resolution)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: lsig-runtime-agent
+  labels:
+    app.kubernetes.io/name: lsig-runtime-agent
+rules:
+  - apiGroups: [""]
+    resources: [pods, nodes]
+    verbs: [get, list, watch]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: lsig-runtime-agent
+  labels:
+    app.kubernetes.io/name: lsig-runtime-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: lsig-runtime-agent
+subjects:
+  - kind: ServiceAccount
+    name: lsig-runtime-agent
+    namespace: lsig
+
+---
+# Service for Prometheus scraping
+apiVersion: v1
+kind: Service
+metadata:
+  name: lsig-runtime-agent-metrics
+  namespace: lsig
+  labels:
+    app.kubernetes.io/name: lsig-runtime-agent
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port:   "9091"
+spec:
+  clusterIP: None    # headless — Prometheus discovers individual pods
+  selector:
+    app.kubernetes.io/name: lsig-runtime-agent
+  ports:
+    - name: metrics
+      port: 9091
+      targetPort: 9091
